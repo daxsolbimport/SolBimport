@@ -2263,17 +2263,17 @@ const baseStyles = `
 .chip-active { background: var(--navy); color: var(--navy-text); border-color: var(--navy); }
 
 /* Grid / product cards */
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; align-items: stretch; }
 .pcard {
   border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #fff;
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: column; height: 100%;
 }
 .pcard-img {
   aspect-ratio: 1; background: var(--paper-deep); display: flex; align-items: center; justify-content: center;
   overflow: hidden;
 }
 .pcard-img img { width: 100%; height: 100%; object-fit: cover; }
-.pcard-body { padding: 11px; display: flex; flex-direction: column; gap: 5px; }
+.pcard-body { padding: 11px; display: flex; flex-direction: column; gap: 5px; flex: 1; }
 .pcard-cat { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--terracotta); font-weight: 700; }
 .pcard-name { font-size: 14px; font-weight: 600; line-height: 1.3; }
 .pcard-desc { font-size: 12px; color: var(--muted-text); line-height: 1.35; }
@@ -2281,6 +2281,9 @@ const baseStyles = `
 .money-usd { font-size: 16px; font-weight: 700; color: var(--navy); }
 .money-pen { font-size: 12px; color: var(--muted-text); font-weight: 500; }
 .pcard-ship { font-size: 11px; color: var(--muted-text); display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+/* Push the order button (and the copy link below it) to the bottom of the card
+   so they line up across a row regardless of how much text is above them. */
+.pcard-body .btn-whatsapp { margin-top: auto; }
 
 /* Buttons */
 .btn {
