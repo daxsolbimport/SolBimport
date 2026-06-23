@@ -618,7 +618,11 @@ export default function App() {
   const [lang, setLang] = useState("es");
   const [theme, setTheme] = useState(DEFAULT_THEME);
   const [links, setLinks] = useState(DEFAULT_LINKS);
-  const STORE_PIN = "1234"; // simple gate, change anytime
+  // PIN is loaded from Supabase (key "settings:adminPin"). Falls back to "dax"
+  // until the remote value loads, so the owner is never locked out. To change
+  // the PIN, update the value in the Supabase store_data table — there is no
+  // change-PIN UI on the public site, by design (keeps it out of the source code).
+  const [storePin, setStorePin] = useState("dax");
   const t = STRINGS[lang];
 
   const { rate, status: rateStatus, refetch, manualOverride, setOverride } = useExchangeRate();
@@ -632,6 +636,8 @@ export default function App() {
       if (savedTheme) setTheme({ ...DEFAULT_THEME, ...savedTheme });
       const savedLinks = await storageGet("settings:links", null);
       if (savedLinks) setLinks({ ...DEFAULT_LINKS, ...savedLinks });
+      const savedPin = await storageGet("settings:adminPin", null);
+      if (savedPin) setStorePin(String(savedPin));
     })();
   }, []);
 
@@ -766,7 +772,7 @@ export default function App() {
             error={pinError}
             t={t}
             onSubmit={() => {
-              if (pinAttempt === STORE_PIN) { setUnlocked(true); setPinError(false); setPinAttempt(""); }
+              if (pinAttempt === storePin) { setUnlocked(true); setPinError(false); setPinAttempt(""); }
               else { setPinError(true); }
             }}
             onCancel={() => { setTab("catalog"); setPinAttempt(""); setPinError(false); }}
@@ -837,7 +843,6 @@ function PinGate({ value, setValue, onSubmit, error, t, onCancel }) {
       <input
         className="input pin-input"
         type="password"
-        inputMode="numeric"
         placeholder={t.pinPlaceholder}
         value={value}
         onChange={e => setValue(e.target.value)}
@@ -1839,7 +1844,7 @@ const baseStyles = `
 
 /* Pin gate */
 .pingate { text-align: center; padding: 32px 20px; display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--navy); }
-.pin-input { max-width: 160px; text-align: center; letter-spacing: 4px; margin: 10px 0; }
+.pin-input { max-width: 200px; text-align: center; letter-spacing: 1px; margin: 10px 0; }
 .error-text { color: #C1422D; font-size: 12.5px; display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
 
 /* Orders */
