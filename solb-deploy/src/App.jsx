@@ -83,6 +83,33 @@ async function storageSet(key, value) {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+// Downscale an image data URI to fit within maxDim (px) and re-encode as JPEG
+// at the given quality. Keeps multi-photo products small enough to sync.
+function downscaleImage(dataUri, maxDim = 1200, quality = 0.82) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width >= height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+        else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+      }
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { resolve(dataUri); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      } catch {
+        resolve(dataUri); // on any failure, keep the original
+      }
+    };
+    img.onerror = () => resolve(dataUri);
+    img.src = dataUri;
+  });
+}
+
 /* ---------------------------------------------------------------
    THEME / COLOR UTILITIES
 ----------------------------------------------------------------*/
@@ -235,6 +262,13 @@ const STRINGS = {
     orderWhatsapp: "Pedir por WhatsApp",
     copyLink: "Copiar enlace",
     linkCopied: "Enlace copiado",
+    viewProduct: "Ver producto",
+    backToCatalog: "Volver al catálogo",
+    productNotFound: "Producto no encontrado",
+    productNotFoundSub: "Es posible que ya no esté disponible.",
+    shareProduct: "Compartir este producto",
+    photoOf: "Foto",
+    morePhotos: "Más fotos",
     pinTitle: "Acceso para la dueña",
     pinSub: "Ingresa el PIN para administrar productos y pedidos.",
     pinPlaceholder: "PIN",
@@ -343,6 +377,13 @@ const STRINGS = {
     orderWhatsapp: "Order via WhatsApp",
     copyLink: "Copy link",
     linkCopied: "Link copied",
+    viewProduct: "View product",
+    backToCatalog: "Back to catalog",
+    productNotFound: "Product not found",
+    productNotFoundSub: "It may no longer be available.",
+    shareProduct: "Share this product",
+    photoOf: "Photo",
+    morePhotos: "More photos",
     pinTitle: "Owner access",
     pinSub: "Enter the PIN to manage products and orders.",
     pinPlaceholder: "PIN",
@@ -507,33 +548,83 @@ function activeSocialLinks(links) {
   return SOCIAL_PLATFORMS.filter(p => links[p.key]?.trim());
 }
 
-function getHashProductId() {
+/* ---------------------------------------------------------------
+   ROUTING — clean URLs (/producto/<slug>) via History API
+----------------------------------------------------------------*/
+// Turn a product name into a URL-safe slug, e.g. "Audífonos inalámbricos" -> "audifonos-inalambricos"
+function slugify(text) {
+  return String(text)
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // strip accents
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")  // non-alphanumerics -> hyphen
+    .replace(/^-+|-+$/g, "")       // trim hyphens
+    .slice(0, 60) || "producto";
+}
+
+// Each product's public slug: name-slug + short id suffix to guarantee uniqueness
+function productSlug(product) {
+  return `${slugify(product.name)}-${product.id}`;
+}
+
+// Full shareable URL for a product detail page
+function productLink(product) {
+  return `${window.location.origin}/producto/${productSlug(product)}`;
+}
+
+// Parse the current path. Returns { view: "catalog" | "product", slug? }
+function parseRoute() {
+  const path = window.location.pathname;
+  const m = path.match(/^\/producto\/(.+)$/);
+  if (m) return { view: "product", slug: decodeURIComponent(m[1]) };
+  return { view: "catalog" };
+}
+
+// Find a product from a slug. The id is the last hyphen-separated chunk,
+// so we match on that (robust even if the owner later renames the product).
+function productFromSlug(slug, products) {
+  if (!slug || !products) return null;
+  const id = slug.split("-").pop();
+  return products.find(p => p.id === id) || null;
+}
+
+// Backward-compat: old links used #product-<id>. Still honor them.
+function getLegacyHashProductId() {
   const m = window.location.hash.match(/product-([a-z0-9]+)/i);
   return m ? m[1] : null;
 }
 
-function productLink(id) {
-  const base = window.location.href.split("#")[0];
-  return `${base}#product-${id}`;
+// Navigate without a full page reload, then notify listeners.
+function navigateTo(url) {
+  window.history.pushState({}, "", url);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 const seedProducts = () => ([
   {
     id: uid(), name: "Audífonos inalámbricos", category: "Electrónica",
-    priceUsd: 24.99, weightLb: 0.6, photo: "",
+    priceUsd: 24.99, weightLb: 0.6, photo: "", photos: [],
     desc: "Audífonos bluetooth con estuche de carga.", active: true,
   },
   {
     id: uid(), name: "Vitamina C 1000mg (120 cápsulas)", category: "Suplementos",
-    priceUsd: 14.5, weightLb: 0.5, photo: "",
+    priceUsd: 14.5, weightLb: 0.5, photo: "", photos: [],
     desc: "Frasco de 120 cápsulas, marca americana.", active: true,
   },
   {
     id: uid(), name: "Crema facial retinol", category: "Belleza",
-    priceUsd: 19.0, weightLb: 0.4, photo: "",
+    priceUsd: 19.0, weightLb: 0.4, photo: "", photos: [],
     desc: "Tratamiento nocturno anti-edad.", active: true,
   },
 ]);
+
+// A product may store its images in `photos[]` (new, multi-image) or the
+// legacy single `photo` string. This returns a normalized array for display.
+function productPhotos(product) {
+  if (Array.isArray(product.photos) && product.photos.length) return product.photos;
+  if (product.photo) return [product.photo];
+  return [];
+}
+
 
 /* ---------------------------------------------------------------
    EXCHANGE RATE HOOK
@@ -615,6 +706,7 @@ export default function App() {
   const [pinAttempt, setPinAttempt] = useState("");
   const [pinError, setPinError] = useState(false);
   const [highlightId, setHighlightId] = useState(null);
+  const [route, setRoute] = useState(() => parseRoute());
   const [lang, setLang] = useState("es");
   const [theme, setTheme] = useState(DEFAULT_THEME);
   const [links, setLinks] = useState(DEFAULT_LINKS);
@@ -664,14 +756,37 @@ export default function App() {
 
   const themeVars = useMemo(() => buildThemeVars(theme), [theme]);
 
-  // detect deep link to a specific product on first load
+  // ROUTER: keep `route` in sync with the browser URL on back/forward and
+  // on programmatic navigation (navigateTo fires a popstate event).
   useEffect(() => {
-    const id = getHashProductId();
-    if (id) {
-      setHighlightId(id);
-      setTab("catalog");
+    const onNav = () => {
+      // Honor old #product-<id> links by redirecting to the clean URL once
+      // products are available; otherwise just sync the route.
+      const legacyId = getLegacyHashProductId();
+      if (legacyId && products) {
+        const prod = products.find(p => p.id === legacyId);
+        if (prod) {
+          window.history.replaceState({}, "", productLink(prod));
+        }
+      }
+      setRoute(parseRoute());
+    };
+    window.addEventListener("popstate", onNav);
+    return () => window.removeEventListener("popstate", onNav);
+  }, [products]);
+
+  // Once products load, resolve any legacy hash link to a clean product URL.
+  useEffect(() => {
+    if (!products) return;
+    const legacyId = getLegacyHashProductId();
+    if (legacyId) {
+      const prod = products.find(p => p.id === legacyId);
+      if (prod) {
+        window.history.replaceState({}, "", productLink(prod));
+        setRoute(parseRoute());
+      }
     }
-  }, []);
+  }, [products]);
 
   // load
   useEffect(() => {
@@ -693,6 +808,51 @@ export default function App() {
   useEffect(() => { storageSet("settings:margin", marginPct); }, [marginPct]);
 
   const effectiveRate = rate * (1 + marginPct / 100);
+
+  // The product currently addressed by the URL, if any.
+  const routedProduct = route.view === "product"
+    ? productFromSlug(route.slug, products)
+    : null;
+
+  // SEO: update the page <title> and meta description to reflect the current
+  // view. Search engines and link-preview crawlers read these. We restore the
+  // catalog defaults whenever we're not on a product page.
+  useEffect(() => {
+    const setMeta = (name, content) => {
+      let el = document.querySelector(`meta[name="${name}"]`);
+      if (!el) { el = document.createElement("meta"); el.setAttribute("name", name); document.head.appendChild(el); }
+      el.setAttribute("content", content);
+    };
+    const setOG = (prop, content) => {
+      let el = document.querySelector(`meta[property="${prop}"]`);
+      if (!el) { el = document.createElement("meta"); el.setAttribute("property", prop); document.head.appendChild(el); }
+      el.setAttribute("content", content);
+    };
+    if (routedProduct) {
+      const priceUsd = routedProduct.priceUsd.toFixed(2);
+      const title = `${routedProduct.name} — ${STORE_NAME}`;
+      const desc = routedProduct.desc
+        ? `${routedProduct.desc} — $${priceUsd}. ${STORE_NAME}: importación de USA a Perú.`
+        : `${routedProduct.name} — $${priceUsd}. ${STORE_NAME}: importación de USA a Perú, pedido por WhatsApp.`;
+      document.title = title;
+      setMeta("description", desc);
+      setOG("og:title", title);
+      setOG("og:description", desc);
+      setOG("og:type", "product");
+      setOG("og:url", productLink(routedProduct));
+      const imgs = productPhotos(routedProduct);
+      if (imgs.length) setOG("og:image", imgs[0]);
+    } else {
+      const title = `${STORE_NAME} — Importación de USA a Perú`;
+      const desc = `${STORE_NAME}: productos importados de Estados Unidos a Perú. Electrónica, ropa, belleza y más. Precios en dólares y soles, pedido fácil por WhatsApp.`;
+      document.title = title;
+      setMeta("description", desc);
+      setOG("og:title", title);
+      setOG("og:description", desc);
+      setOG("og:type", "website");
+      setOG("og:url", window.location.origin + "/");
+    }
+  }, [routedProduct, lang]);
 
   if (!products || !orders) {
     return (
@@ -727,27 +887,43 @@ export default function App() {
       </nav>
 
       <main className="content">
-        {tab === "catalog" && (
-          <Catalog products={products.filter(p => p.active)} rate={effectiveRate} tiers={tiers} setOrders={setOrders} highlightId={highlightId} t={t} lang={lang} links={links} />
-        )}
-
-        {tab === "manage" && unlocked && (
-          <ManageProducts
-            products={products} setProducts={setProducts}
-            tiers={tiers} setTiers={setTiers}
-            rate={rate} effectiveRate={effectiveRate}
-            marginPct={marginPct} setMarginPct={setMarginPct}
-            rateStatus={rateStatus} refetch={refetch}
-            manualOverride={manualOverride} setOverride={setOverride}
-            onLock={() => { setUnlocked(false); setTab("catalog"); }}
-            t={t} lang={lang}
-            theme={theme} updateTheme={updateTheme}
-            links={links} updateLinks={updateLinks}
+        {routedProduct && tab === "catalog" ? (
+          <ProductPage
+            product={routedProduct}
+            rate={effectiveRate}
+            tiers={tiers}
+            t={t}
+            lang={lang}
+            links={links}
+            onBack={() => navigateTo(window.location.origin + "/")}
           />
-        )}
+        ) : route.view === "product" && !routedProduct && tab === "catalog" ? (
+          <ProductNotFound t={t} onBack={() => navigateTo(window.location.origin + "/")} />
+        ) : (
+          <>
+            {tab === "catalog" && (
+              <Catalog products={products.filter(p => p.active)} rate={effectiveRate} tiers={tiers} setOrders={setOrders} highlightId={highlightId} t={t} lang={lang} links={links} />
+            )}
 
-        {tab === "orders" && unlocked && (
-          <Orders orders={orders} setOrders={setOrders} rate={effectiveRate} t={t} />
+            {tab === "manage" && unlocked && (
+              <ManageProducts
+                products={products} setProducts={setProducts}
+                tiers={tiers} setTiers={setTiers}
+                rate={rate} effectiveRate={effectiveRate}
+                marginPct={marginPct} setMarginPct={setMarginPct}
+                rateStatus={rateStatus} refetch={refetch}
+                manualOverride={manualOverride} setOverride={setOverride}
+                onLock={() => { setUnlocked(false); setTab("catalog"); }}
+                t={t} lang={lang}
+                theme={theme} updateTheme={updateTheme}
+                links={links} updateLinks={updateLinks}
+              />
+            )}
+
+            {tab === "orders" && unlocked && (
+              <Orders orders={orders} setOrders={setOrders} rate={effectiveRate} t={t} />
+            )}
+          </>
         )}
 
         {/* Discreet owner button — inside the content box, bottom-right corner */}
@@ -863,18 +1039,26 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
   const [activeCat, setActiveCat] = useState(t.all);
   const [copiedId, setCopiedId] = useState(null);
 
-  // if a product is deep-linked, make sure category/search don't hide it
+  // if a product is deep-linked, make sure category/search don't hide it,
+  // then scroll to it. Retries briefly so it works even if the card hasn't
+  // painted yet (e.g. products still arriving from the network).
   useEffect(() => {
     if (!highlightId) return;
     const target = products.find(p => p.id === highlightId);
-    if (target) {
-      setActiveCat(t.all);
-      setQuery("");
-      setTimeout(() => {
-        const el = document.getElementById(`product-${highlightId}`);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }, 150);
-    }
+    if (!target) return;
+    setActiveCat(t.all);
+    setQuery("");
+    let tries = 0;
+    const tryScroll = () => {
+      const el = document.getElementById(`product-${highlightId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      } else if (tries < 20) {
+        tries += 1;
+        setTimeout(tryScroll, 100);
+      }
+    };
+    tryScroll();
   }, [highlightId, products]);
 
   // reset category filter to "all" when language changes (label text differs)
@@ -899,10 +1083,15 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
   }
 
   function copyLink(product) {
-    const link = productLink(product.id);
+    const link = productLink(product);
     navigator.clipboard?.writeText(link).catch(() => {});
     setCopiedId(product.id);
     setTimeout(() => setCopiedId(null), 1800);
+  }
+
+  function openProduct(product) {
+    navigateTo(productLink(product));
+    window.scrollTo({ top: 0 });
   }
 
   if (products.length === 0) {
@@ -941,14 +1130,18 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
           {filtered.map(p => {
             const { tier, cost } = shippingFor(p.weightLb, tiers);
             const isHighlighted = p.id === highlightId;
+            const imgs = productPhotos(p);
             return (
               <div className={`pcard ${isHighlighted ? "pcard-highlight" : ""}`} key={p.id} id={`product-${p.id}`}>
-                <div className="pcard-img">
-                  {p.photo ? <img src={p.photo} alt={p.name} /> : <ImagePlus size={26} className="muted" />}
-                </div>
+                <button className="pcard-img pcard-img-btn" onClick={() => openProduct(p)} aria-label={p.name}>
+                  {imgs.length ? <img src={imgs[0]} alt={p.name} /> : <ImagePlus size={26} className="muted" />}
+                  {imgs.length > 1 && (
+                    <span className="pcard-photocount"><ImagePlus size={11} /> {imgs.length}</span>
+                  )}
+                </button>
                 <div className="pcard-body">
                   <div className="pcard-cat">{categoryLabel(p.category, lang)}</div>
-                  <div className="pcard-name">{p.name}</div>
+                  <button className="pcard-name pcard-name-btn" onClick={() => openProduct(p)}>{p.name}</button>
                   {p.desc && <div className="pcard-desc">{p.desc}</div>}
                   <Money usd={p.priceUsd} rate={rate} />
                   <div className="pcard-ship">
@@ -974,7 +1167,129 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
 }
 
 /* ---------------------------------------------------------------
-   SOCIAL FOOTER
+   PRODUCT PAGE (own URL: /producto/<slug>)
+----------------------------------------------------------------*/
+function ProductPage({ product, rate, tiers, t, lang, links, onBack }) {
+  const [copied, setCopied] = useState(false);
+  const photos = productPhotos(product);
+  const { tier, cost } = shippingFor(product.weightLb, tiers);
+
+  const waNumber = links.whatsapp?.trim()
+    ? links.whatsapp.replace(/\D/g, "")
+    : WHATSAPP_NUMBER;
+
+  function order() {
+    const totalUsd = product.priceUsd + cost;
+    const link = productLink(product);
+    const msg = `Hola! Quiero pedir:\n\n*${product.name}*\nPrecio: $${product.priceUsd.toFixed(2)} (S/ ${(product.priceUsd * rate).toFixed(2)})\nEnvío (${tier.label}): $${cost.toFixed(2)}\nTotal: $${totalUsd.toFixed(2)} (S/ ${(totalUsd * rate).toFixed(2)})\n\n${link}`;
+    window.open(`https://wa.me/${waNumber}?text=${encodeURIComponent(msg)}`, "_blank");
+  }
+
+  function share() {
+    const link = productLink(product);
+    if (navigator.share) {
+      navigator.share({ title: product.name, url: link }).catch(() => {});
+    } else {
+      navigator.clipboard?.writeText(link).catch(() => {});
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    }
+  }
+
+  return (
+    <div className="product-page">
+      <button className="back-link" onClick={onBack}>
+        <ChevronRight size={16} style={{ transform: "rotate(180deg)" }} /> {t.backToCatalog}
+      </button>
+
+      <Gallery photos={photos} name={product.name} t={t} />
+
+      <div className="product-info">
+        <div className="product-cat">{categoryLabel(product.category, lang)}</div>
+        <h1 className="product-title">{product.name}</h1>
+        {product.desc && <p className="product-desc">{product.desc}</p>}
+
+        <div className="product-price">
+          <Money usd={product.priceUsd} rate={rate} />
+        </div>
+        <div className="product-ship">
+          <Truck size={15} /> {t.shipping} ({tier.label.toLowerCase()}): <Money usd={cost} rate={rate} stacked={false} />
+        </div>
+
+        <button className="btn btn-whatsapp product-order" onClick={order}>
+          <MessageCircle size={18} /> {t.orderWhatsapp}
+        </button>
+        <button className="btn btn-linkcopy product-share" onClick={share}>
+          {copied ? <><Check size={15} /> {t.linkCopied}</> : <><Link2 size={15} /> {t.shareProduct}</>}
+        </button>
+      </div>
+
+      <ContactSection links={links} t={t} />
+      <SocialFooter links={links} t={t} />
+    </div>
+  );
+}
+
+// Swipeable / tappable image gallery. Falls back to a placeholder when empty.
+function Gallery({ photos, name, t }) {
+  const [idx, setIdx] = useState(0);
+  if (!photos.length) {
+    return (
+      <div className="gallery gallery-empty">
+        <ImagePlus size={40} className="muted" />
+      </div>
+    );
+  }
+  const go = (n) => setIdx((idx + n + photos.length) % photos.length);
+  return (
+    <div className="gallery">
+      <div className="gallery-main">
+        <img src={photos[idx]} alt={`${name} — ${t.photoOf} ${idx + 1}`} />
+        {photos.length > 1 && (
+          <>
+            <button className="gallery-arrow gallery-prev" onClick={() => go(-1)} aria-label="←">
+              <ChevronRight size={20} style={{ transform: "rotate(180deg)" }} />
+            </button>
+            <button className="gallery-arrow gallery-next" onClick={() => go(1)} aria-label="→">
+              <ChevronRight size={20} />
+            </button>
+            <div className="gallery-counter">{idx + 1} / {photos.length}</div>
+          </>
+        )}
+      </div>
+      {photos.length > 1 && (
+        <div className="gallery-thumbs">
+          {photos.map((src, i) => (
+            <button
+              key={i}
+              className={`gallery-thumb ${i === idx ? "gallery-thumb-active" : ""}`}
+              onClick={() => setIdx(i)}
+              aria-label={`${t.photoOf} ${i + 1}`}
+            >
+              <img src={src} alt="" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProductNotFound({ t, onBack }) {
+  return (
+    <div className="empty-state">
+      <Package size={32} />
+      <h3>{t.productNotFound}</h3>
+      <p className="muted">{t.productNotFoundSub}</p>
+      <button className="btn btn-linkcopy" style={{ maxWidth: 220, marginTop: 12 }} onClick={onBack}>
+        <ChevronRight size={15} style={{ transform: "rotate(180deg)" }} /> {t.backToCatalog}
+      </button>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   CONTACT + SOCIAL FOOTER
 ----------------------------------------------------------------*/
 function ContactSection({ links, t }) {
   const waNumber = links.whatsapp?.trim()
@@ -1032,7 +1347,7 @@ function SocialFooter({ links, t }) {
    MANAGE PRODUCTS (owner)
 ----------------------------------------------------------------*/
 function emptyForm() {
-  return { id: null, name: "", category: CATEGORIES[0], priceUsd: "", weightLb: "", photo: "", desc: "", active: true };
+  return { id: null, name: "", category: CATEGORIES[0], priceUsd: "", weightLb: "", photo: "", photos: [], desc: "", active: true };
 }
 
 function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiveRate, marginPct, setMarginPct, rateStatus, refetch, manualOverride, setOverride, onLock, t, lang, theme, updateTheme, links, updateLinks }) {
@@ -1042,14 +1357,16 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
   const [bioCopied, setBioCopied] = useState(false);
 
   function copyBioLink() {
-    const link = window.location.href.split("#")[0];
+    const link = window.location.origin + "/";
     navigator.clipboard?.writeText(link).catch(() => {});
     setBioCopied(true);
     setTimeout(() => setBioCopied(false), 1800);
   }
 
   function startEdit(p) {
-    setForm({ ...p, priceUsd: String(p.priceUsd), weightLb: String(p.weightLb) });
+    // Migrate legacy single-photo products into the photos[] array for editing.
+    const photos = productPhotos(p);
+    setForm({ ...p, photos, priceUsd: String(p.priceUsd), weightLb: String(p.weightLb) });
     setEditingId(p.id);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1061,13 +1378,17 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
 
   function save() {
     if (!form.name.trim() || !form.priceUsd || !form.weightLb) return;
+    const photos = Array.isArray(form.photos) ? form.photos : [];
     const payload = {
       id: editingId ?? uid(),
       name: form.name.trim(),
       category: form.category,
       priceUsd: parseFloat(form.priceUsd) || 0,
       weightLb: parseFloat(form.weightLb) || 0,
-      photo: form.photo,
+      photos,
+      // keep the legacy single `photo` in sync (first image) so any old code
+      // path or cached link still shows something sensible
+      photo: photos[0] || "",
       desc: form.desc.trim(),
       active: form.active,
     };
@@ -1089,12 +1410,35 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
     setProducts(products.map(p => p.id === id ? { ...p, active: !p.active } : p));
   }
 
+  // Add one or more photos. Images are downscaled before storing so several
+  // photos per product don't bloat the synced record (Supabase row size).
   function handlePhoto(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setForm(f => ({ ...f, photo: reader.result }));
-    reader.readAsDataURL(file);
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        downscaleImage(reader.result, 1200, 0.82).then(dataUri => {
+          setForm(f => ({ ...f, photos: [...(f.photos || []), dataUri] }));
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = ""; // allow re-selecting the same file
+  }
+
+  function removePhoto(index) {
+    setForm(f => ({ ...f, photos: (f.photos || []).filter((_, i) => i !== index) }));
+  }
+
+  function movePhoto(index, dir) {
+    setForm(f => {
+      const arr = [...(f.photos || [])];
+      const j = index + dir;
+      if (j < 0 || j >= arr.length) return f;
+      [arr[index], arr[j]] = [arr[j], arr[index]];
+      return { ...f, photos: arr };
+    });
   }
 
   return (
@@ -1137,9 +1481,29 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
                 <input className="input" value={form.desc} onChange={e => setForm({ ...form, desc: e.target.value })} placeholder={t.descPlaceholder} />
               </label>
               <label className="field field-wide">
-                <span>{t.photo}</span>
-                <input className="input" type="file" accept="image/*" onChange={handlePhoto} />
-                {form.photo && <img src={form.photo} className="photo-preview" alt="preview" />}
+                <span>{t.photo}{(form.photos?.length > 0) ? ` (${form.photos.length})` : ""}</span>
+                <input className="input" type="file" accept="image/*" multiple onChange={handlePhoto} />
+                {form.photos?.length > 0 && (
+                  <div className="photo-manager">
+                    {form.photos.map((src, i) => (
+                      <div className="photo-chip" key={i}>
+                        <img src={src} alt={`${t.photoOf} ${i + 1}`} />
+                        {i === 0 && <span className="photo-chip-main">★</span>}
+                        <div className="photo-chip-actions">
+                          <button type="button" onClick={() => movePhoto(i, -1)} disabled={i === 0} aria-label="←">
+                            <ChevronRight size={13} style={{ transform: "rotate(180deg)" }} />
+                          </button>
+                          <button type="button" onClick={() => movePhoto(i, 1)} disabled={i === form.photos.length - 1} aria-label="→">
+                            <ChevronRight size={13} />
+                          </button>
+                          <button type="button" className="photo-chip-del" onClick={() => removePhoto(i)} aria-label="✕">
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </label>
             </div>
             {form.priceUsd && form.weightLb && (
@@ -1162,7 +1526,7 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
             {products.map(p => (
               <div className="manage-row" key={p.id}>
                 <div className="manage-row-img">
-                  {p.photo ? <img src={p.photo} alt="" /> : <ImagePlus size={18} className="muted" />}
+                  {productPhotos(p).length ? <img src={productPhotos(p)[0]} alt="" /> : <ImagePlus size={18} className="muted" />}
                 </div>
                 <div className="manage-row-info">
                   <div className="manage-row-name">
@@ -1185,7 +1549,7 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
           <div className="bio-link-box">
             <div>
               <div className="bio-link-label"><Link2 size={13} /> {t.bioLinkLabel}</div>
-              <div className="bio-link-url">{window.location.href.split("#")[0]}</div>
+              <div className="bio-link-url">{window.location.origin + "/"}</div>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={copyBioLink}>
               {bioCopied ? <><Check size={14} /> {t.copied}</> : <><Copy size={14} /> {t.copy}</>}
@@ -1770,13 +2134,100 @@ const baseStyles = `
 .pcard-highlight {
   border-color: var(--terracotta);
   box-shadow: 0 0 0 3px var(--terracotta-soft);
-  animation: highlight-pulse 1.6s ease-out 1;
+  animation: highlight-pulse 1.4s ease-out 3;
 }
 @keyframes highlight-pulse {
   0% { box-shadow: 0 0 0 3px var(--terracotta-soft); }
-  50% { box-shadow: 0 0 0 7px var(--terracotta-soft); }
+  50% { box-shadow: 0 0 0 8px var(--terracotta-soft); }
   100% { box-shadow: 0 0 0 3px var(--terracotta-soft); }
 }
+
+/* Clickable card image + name (open product page) */
+.pcard-img-btn {
+  border: none; padding: 0; width: 100%; cursor: pointer; position: relative;
+  aspect-ratio: 1; background: var(--paper-deep);
+}
+.pcard-img-btn:hover img { transform: scale(1.04); }
+.pcard-img-btn img { transition: transform 0.25s ease; }
+.pcard-photocount {
+  position: absolute; bottom: 6px; right: 6px;
+  background: rgba(31,51,68,0.82); color: #fff; font-size: 11px; font-weight: 600;
+  padding: 2px 7px; border-radius: 99px; display: flex; align-items: center; gap: 3px;
+}
+.pcard-name-btn {
+  background: none; border: none; padding: 0; text-align: left; cursor: pointer;
+  font-size: 14px; font-weight: 600; line-height: 1.3; color: var(--ink);
+}
+.pcard-name-btn:hover { color: var(--terracotta); text-decoration: underline; }
+
+/* Product page */
+.product-page { animation: fade-in 0.2s ease; }
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.back-link {
+  display: inline-flex; align-items: center; gap: 4px; background: none; border: none;
+  color: var(--navy); font-size: 13px; font-weight: 600; cursor: pointer; padding: 4px 0; margin-bottom: 12px;
+}
+.back-link:hover { color: var(--terracotta); }
+.product-info { margin-top: 16px; }
+.product-cat { font-size: 11px; text-transform: uppercase; letter-spacing: 0.9px; color: var(--terracotta); font-weight: 700; }
+.product-title { font-size: 23px; font-weight: 700; line-height: 1.2; margin: 6px 0 10px; color: var(--navy); }
+.product-desc { font-size: 14.5px; line-height: 1.5; color: var(--ink); margin: 0 0 16px; }
+.product-price { margin: 10px 0; }
+.product-price .money-usd { font-size: 26px; }
+.product-price .money-pen { font-size: 14px; }
+.product-ship { font-size: 13px; color: var(--muted-text); display: flex; align-items: center; gap: 5px; margin-bottom: 18px; }
+.product-order { max-width: 340px; padding: 13px; font-size: 15px; }
+.product-share { max-width: 340px; }
+
+/* Gallery */
+.gallery { margin-bottom: 8px; }
+.gallery-empty {
+  aspect-ratio: 1; max-width: 420px; background: var(--paper-deep); border: 1px solid var(--line);
+  border-radius: var(--radius); display: flex; align-items: center; justify-content: center;
+}
+.gallery-main {
+  position: relative; max-width: 420px; aspect-ratio: 1; background: var(--paper-deep);
+  border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+}
+.gallery-main img { width: 100%; height: 100%; object-fit: cover; }
+.gallery-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 36px; height: 36px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255,255,255,0.92); color: var(--navy); display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.gallery-arrow:hover { background: #fff; }
+.gallery-prev { left: 10px; }
+.gallery-next { right: 10px; }
+.gallery-counter {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  background: rgba(31,51,68,0.82); color: #fff; font-size: 12px; font-weight: 600;
+  padding: 3px 10px; border-radius: 99px;
+}
+.gallery-thumbs { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; max-width: 420px; }
+.gallery-thumb {
+  width: 60px; height: 60px; border-radius: 9px; overflow: hidden; cursor: pointer;
+  border: 2px solid transparent; padding: 0; background: var(--paper-deep);
+}
+.gallery-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.gallery-thumb-active { border-color: var(--terracotta); }
+
+/* Photo manager (admin) */
+.photo-manager { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.photo-chip { position: relative; width: 84px; }
+.photo-chip > img { width: 84px; height: 84px; object-fit: cover; border-radius: 9px; border: 1px solid var(--line); display: block; }
+.photo-chip-main {
+  position: absolute; top: 4px; left: 4px; background: var(--terracotta); color: #fff;
+  font-size: 11px; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.photo-chip-actions { display: flex; gap: 3px; margin-top: 4px; justify-content: center; }
+.photo-chip-actions button {
+  width: 24px; height: 22px; border: 1px solid var(--line); background: #fff; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--navy);
+}
+.photo-chip-actions button:disabled { opacity: 0.35; cursor: default; }
+.photo-chip-del { color: #C0392B !important; }
+.photo-chip-del:hover { background: #FDEDEC !important; }
 
 .bio-link-divider { height: 1px; background: var(--line); margin: 24px 0 16px; }
 .bio-link-box {
