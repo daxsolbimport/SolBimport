@@ -294,6 +294,10 @@ const STRINGS = {
     groupSite: "Ajustes del sitio",
     categoriesTitle: "Categorías",
     categoriesSub: "Crea o elimina categorías. Al eliminar una, sus productos pasan a \"Otros\" (no se borran).",
+    catOrderHint: "Usa las flechas para ordenar cómo aparecen en la tienda.",
+    mainCategory: "Categoría principal",
+    alsoShowIn: "Mostrar también en (opcional)",
+    noOtherCats: "No hay otras categorías.",
     catPlaceholder: "Ej. Navidad, Juguetes...",
     add: "Agregar",
     catExists: "Esa categoría ya existe.",
@@ -424,6 +428,10 @@ const STRINGS = {
     groupSite: "Site settings",
     categoriesTitle: "Categories",
     categoriesSub: "Add or remove categories. Deleting one moves its products to \"Other\" (nothing is lost).",
+    catOrderHint: "Use the arrows to set the order they appear in the store.",
+    mainCategory: "Main category",
+    alsoShowIn: "Also show in (optional)",
+    noOtherCats: "No other categories.",
     catPlaceholder: "e.g. Christmas, Toys...",
     add: "Add",
     catExists: "That category already exists.",
@@ -661,6 +669,16 @@ function productPhotos(product) {
   return [];
 }
 
+// All categories a product belongs to: its main `category` plus any optional
+// extras in `categories[]`. Deduped, main always first. Used for filtering so
+// a TV tagged Electronics + Home shows under both chips.
+function productCategories(product) {
+  const main = product.category;
+  const extras = Array.isArray(product.categories) ? product.categories : [];
+  const all = [main, ...extras].filter(Boolean);
+  return [...new Set(all)];
+}
+
 
 /* ---------------------------------------------------------------
    EXCHANGE RATE HOOK
@@ -805,18 +823,34 @@ export default function App() {
     return true;
   }
 
-  // Delete a category. Any products in it are moved to "Otros" so nothing is
-  // lost. The "Otros" bucket itself can't be deleted. If "Otros" doesn't exist
-  // yet (owner removed it earlier somehow), it's re-added when needed.
+  // Delete a category. Any products with it as their MAIN category move to
+  // "Otros" so nothing is lost; it's also stripped from any product's extra
+  // categories list. The "Otros" bucket itself can't be deleted.
   function deleteCategory(name) {
     if (name === OTHER_CATEGORY) return;
-    setProducts(prev => (prev || []).map(p =>
-      p.category === name ? { ...p, category: OTHER_CATEGORY } : p
-    ));
+    setProducts(prev => (prev || []).map(p => {
+      const extras = Array.isArray(p.categories) ? p.categories.filter(c => c !== name) : [];
+      if (p.category === name) {
+        return { ...p, category: OTHER_CATEGORY, categories: extras };
+      }
+      return { ...p, categories: extras };
+    }));
     setCategories(prev => {
       let next = prev.filter(c => c !== name);
       if (!next.includes(OTHER_CATEGORY)) next = [...next, OTHER_CATEGORY];
       return next;
+    });
+  }
+
+  // Reorder the category list (up/down). dir is -1 (up) or +1 (down).
+  function moveCategory(name, dir) {
+    setCategories(prev => {
+      const arr = [...prev];
+      const i = arr.indexOf(name);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= arr.length) return prev;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      return arr;
     });
   }
 
@@ -994,7 +1028,7 @@ export default function App() {
                 t={t} lang={lang}
                 theme={theme} updateTheme={updateTheme}
                 links={links} updateLinks={updateLinks}
-                categories={categories} addCategory={addCategory} deleteCategory={deleteCategory}
+                categories={categories} addCategory={addCategory} deleteCategory={deleteCategory} moveCategory={moveCategory}
               />
             )}
 
@@ -1139,15 +1173,17 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
 
   const filtered = useMemo(() => {
     return products.filter(p => {
-      const matchesCat = !activeCatKey || p.category === activeCatKey;
+      const matchesCat = !activeCatKey || productCategories(p).includes(activeCatKey);
       const matchesQuery = p.name.toLowerCase().includes(query.toLowerCase());
       return matchesCat && matchesQuery;
     });
   }, [products, query, activeCatKey]);
 
-  // category chips: "" = all, then each category that actually has a product
+  // category chips: "" = all, then each category that has at least one product
+  // (counting both main and extra categories), in the owner's chosen order.
   const usedCats = useMemo(() => {
-    const present = new Set(products.map(p => p.category));
+    const present = new Set();
+    products.forEach(p => productCategories(p).forEach(c => present.add(c)));
     return (categories || []).filter(c => present.has(c));
   }, [categories, products]);
   const cats = ["", ...usedCats];
@@ -1427,10 +1463,10 @@ function SocialFooter({ links, t }) {
    MANAGE PRODUCTS (owner)
 ----------------------------------------------------------------*/
 function emptyForm(defaultCat) {
-  return { id: null, name: "", category: defaultCat || OTHER_CATEGORY, priceUsd: "", weightLb: "", photo: "", photos: [], desc: "", active: true };
+  return { id: null, name: "", category: defaultCat || OTHER_CATEGORY, categories: [], priceUsd: "", weightLb: "", photo: "", photos: [], desc: "", active: true };
 }
 
-function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiveRate, marginPct, setMarginPct, rateStatus, refetch, manualOverride, setOverride, onLock, t, lang, theme, updateTheme, links, updateLinks, categories, addCategory, deleteCategory }) {
+function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiveRate, marginPct, setMarginPct, rateStatus, refetch, manualOverride, setOverride, onLock, t, lang, theme, updateTheme, links, updateLinks, categories, addCategory, deleteCategory, moveCategory }) {
   const [form, setForm] = useState(() => emptyForm(categories?.[0]));
   const [editingId, setEditingId] = useState(null);
   // Two groups of sections:
@@ -1449,7 +1485,8 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
   function startEdit(p) {
     // Migrate legacy single-photo products into the photos[] array for editing.
     const photos = productPhotos(p);
-    setForm({ ...p, photos, priceUsd: String(p.priceUsd), weightLb: String(p.weightLb) });
+    const cats = Array.isArray(p.categories) ? p.categories : [];
+    setForm({ ...p, photos, categories: cats, priceUsd: String(p.priceUsd), weightLb: String(p.weightLb) });
     setEditingId(p.id);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1462,10 +1499,14 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
   function save() {
     if (!form.name.trim() || !form.priceUsd || !form.weightLb) return;
     const photos = Array.isArray(form.photos) ? form.photos : [];
+    // extra categories: keep only valid ones, drop the main (it's stored separately)
+    const extras = (Array.isArray(form.categories) ? form.categories : [])
+      .filter(c => c && c !== form.category);
     const payload = {
       id: editingId ?? uid(),
       name: form.name.trim(),
       category: form.category,
+      categories: extras,
       priceUsd: parseFloat(form.priceUsd) || 0,
       weightLb: parseFloat(form.weightLb) || 0,
       photos,
@@ -1551,11 +1592,36 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
                 <input className="input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder={t.namePlaceholder} />
               </label>
               <label className="field">
-                <span>{t.category}</span>
+                <span>{t.mainCategory}</span>
                 <select className="input" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
                   {categories.map(c => <option key={c} value={c}>{categoryLabel(c, lang)}</option>)}
                 </select>
               </label>
+              <div className="field field-wide">
+                <span>{t.alsoShowIn}</span>
+                <div className="cat-check-row">
+                  {categories.filter(c => c !== form.category).map(c => {
+                    const checked = (form.categories || []).includes(c);
+                    return (
+                      <button
+                        type="button"
+                        key={c}
+                        className={`cat-check ${checked ? "cat-check-on" : ""}`}
+                        onClick={() => setForm(f => {
+                          const cur = new Set(f.categories || []);
+                          if (cur.has(c)) cur.delete(c); else cur.add(c);
+                          return { ...f, categories: [...cur] };
+                        })}
+                      >
+                        {checked && <Check size={13} />} {categoryLabel(c, lang)}
+                      </button>
+                    );
+                  })}
+                  {categories.filter(c => c !== form.category).length === 0 && (
+                    <span className="muted" style={{ fontSize: 12 }}>{t.noOtherCats}</span>
+                  )}
+                </div>
+              </div>
               <label className="field">
                 <span>{t.priceUsLabel}</span>
                 <input className="input" type="number" step="0.01" min="0" value={form.priceUsd} onChange={e => setForm({ ...form, priceUsd: e.target.value })} placeholder="0.00" />
@@ -1663,7 +1729,7 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
       {section === "categories" && (
         <CategoriesEditor
           categories={categories} products={products}
-          addCategory={addCategory} deleteCategory={deleteCategory}
+          addCategory={addCategory} deleteCategory={deleteCategory} moveCategory={moveCategory}
           t={t} lang={lang}
         />
       )}
@@ -1682,14 +1748,17 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
 /* ---------------------------------------------------------------
    CATEGORIES EDITOR (site settings)
 ----------------------------------------------------------------*/
-function CategoriesEditor({ categories, products, addCategory, deleteCategory, t, lang }) {
+function CategoriesEditor({ categories, products, addCategory, deleteCategory, moveCategory, t, lang }) {
   const [newCat, setNewCat] = useState("");
   const [error, setError] = useState("");
 
-  // count products per category so the owner sees what a delete will move
+  // count products per category (counting main + extra categories) so the owner
+  // sees the true number a delete will affect
   const counts = useMemo(() => {
     const m = {};
-    for (const p of products) m[p.category] = (m[p.category] || 0) + 1;
+    for (const p of products) {
+      for (const c of productCategories(p)) m[c] = (m[c] || 0) + 1;
+    }
     return m;
   }, [products]);
 
@@ -1725,12 +1794,21 @@ function CategoriesEditor({ categories, products, addCategory, deleteCategory, t
       </div>
       {error && <div className="error-text" style={{ marginTop: 6 }}><AlertCircle size={14} /> {error}</div>}
 
+      <p className="muted" style={{ fontSize: 11.5, marginTop: 14, marginBottom: 6 }}>{t.catOrderHint}</p>
       <div className="cat-list">
-        {categories.map(cat => {
+        {categories.map((cat, i) => {
           const n = counts[cat] || 0;
           const isOther = cat === OTHER_CATEGORY;
           return (
             <div className="cat-row" key={cat}>
+              <div className="cat-reorder">
+                <button className="cat-move-btn" onClick={() => moveCategory(cat, -1)} disabled={i === 0} aria-label="↑">
+                  <ChevronRight size={14} style={{ transform: "rotate(-90deg)" }} />
+                </button>
+                <button className="cat-move-btn" onClick={() => moveCategory(cat, 1)} disabled={i === categories.length - 1} aria-label="↓">
+                  <ChevronRight size={14} style={{ transform: "rotate(90deg)" }} />
+                </button>
+              </div>
               <div className="cat-row-info">
                 <span className="cat-row-name">{categoryLabel(cat, lang)}</span>
                 <span className="cat-row-count">{n} {n === 1 ? t.catItem : t.catItems}</span>
@@ -2452,6 +2530,18 @@ const baseStyles = `
 .cat-row-locked { font-size: 11px; color: var(--muted-text); font-style: italic; }
 .cat-del-btn { background: none; border: 1px solid var(--line); border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #C0392B; }
 .cat-del-btn:hover { background: #FDEDEC; border-color: #F5C6C0; }
+.cat-reorder { display: flex; flex-direction: column; gap: 2px; margin-right: 4px; }
+.cat-move-btn { width: 26px; height: 18px; border: 1px solid var(--line); background: #fff; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--navy); padding: 0; }
+.cat-move-btn:hover:not(:disabled) { background: var(--paper-deep); }
+.cat-move-btn:disabled { opacity: 0.3; cursor: default; }
+/* "Also show in" category checkboxes on the product form */
+.cat-check-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 4px; }
+.cat-check {
+  display: inline-flex; align-items: center; gap: 4px; padding: 6px 11px; border-radius: 99px;
+  border: 1px solid var(--line); background: #fff; font-size: 12.5px; font-weight: 500; cursor: pointer; color: var(--ink);
+}
+.cat-check-on { background: var(--terracotta-soft); border-color: var(--terracotta); color: var(--terracotta-text); font-weight: 600; }
+
 
 
 /* Manage list */
