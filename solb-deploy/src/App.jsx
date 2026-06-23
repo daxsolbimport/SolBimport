@@ -1156,7 +1156,9 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
     const { tier, cost } = shippingFor(product.weightLb, tiers);
     const totalUsd = product.priceUsd + cost;
     const msg = `Hola! Quiero pedir:\n\n*${product.name}*\nPrecio: $${product.priceUsd.toFixed(2)} (S/ ${(product.priceUsd * rate).toFixed(2)})\nEnvío (${tier.label}): $${cost.toFixed(2)}\nTotal: $${totalUsd.toFixed(2)} (S/ ${(totalUsd * rate).toFixed(2)})`;
-    const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(msg)}`;
+    // Use her WhatsApp number from Social settings; fall back to placeholder only if unset.
+    const waNumber = links.whatsapp?.trim() ? links.whatsapp.replace(/\D/g, "") : WHATSAPP_NUMBER;
+    const url = `https://wa.me/${waNumber}?text=${encodeURIComponent(msg)}`;
     window.open(url, "_blank");
   }
 
