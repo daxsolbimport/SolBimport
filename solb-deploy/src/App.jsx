@@ -335,6 +335,12 @@ const STRINGS = {
     category: "Categoría",
     priceUsLabel: "Precio en EE.UU. (USD)",
     weightLabel: "Peso (lb)",
+    stockLabel: "Stock / cantidad (opcional)",
+    stockPlaceholder: "Dejar vacío = sin límite",
+    stockHint: "Si lo dejas vacío, no se controla el stock. Pon un número para mostrar cuántos quedan.",
+    soldOut: "Agotado",
+    inStock: "en stock",
+    onlyLeft: "¡Solo quedan {n}!",
     descLabel: "Descripción (opcional)",
     descPlaceholder: "Detalles cortos del producto",
     photo: "Foto",
@@ -469,6 +475,12 @@ const STRINGS = {
     category: "Category",
     priceUsLabel: "US price (USD)",
     weightLabel: "Weight (lb)",
+    stockLabel: "Stock / quantity (optional)",
+    stockPlaceholder: "Leave blank = unlimited",
+    stockHint: "Leave blank to not track stock. Enter a number to show how many are left.",
+    soldOut: "Sold out",
+    inStock: "in stock",
+    onlyLeft: "Only {n} left!",
     descLabel: "Description (optional)",
     descPlaceholder: "Short product details",
     photo: "Photo",
@@ -678,6 +690,19 @@ function productCategories(product) {
   const all = [main, ...extras].filter(Boolean);
   return [...new Set(all)];
 }
+
+// Stock handling. Stock is OPTIONAL: a blank/undefined value means "not
+// tracked" (unlimited). A number means tracked; 0 means sold out.
+// Returns null when untracked, otherwise the integer count.
+function productStock(product) {
+  const s = product.stock;
+  if (s === "" || s === null || s === undefined) return null;
+  const n = parseInt(s, 10);
+  return isNaN(n) ? null : Math.max(0, n);
+}
+function isTracked(product) { return productStock(product) !== null; }
+function isSoldOut(product) { return productStock(product) === 0; }
+const LOW_STOCK_THRESHOLD = 5; // show "only X left" at or below this
 
 
 /* ---------------------------------------------------------------
@@ -1247,13 +1272,17 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
             const { tier, cost } = shippingFor(p.weightLb, tiers);
             const isHighlighted = p.id === highlightId;
             const imgs = productPhotos(p);
+            const stock = productStock(p);
+            const soldOut = stock === 0;
+            const lowStock = stock !== null && stock > 0 && stock <= LOW_STOCK_THRESHOLD;
             return (
-              <div className={`pcard ${isHighlighted ? "pcard-highlight" : ""}`} key={p.id} id={`product-${p.id}`}>
+              <div className={`pcard ${isHighlighted ? "pcard-highlight" : ""} ${soldOut ? "pcard-soldout" : ""}`} key={p.id} id={`product-${p.id}`}>
                 <button className="pcard-img pcard-img-btn" onClick={() => openProduct(p)} aria-label={p.name}>
                   {imgs.length ? <img src={imgs[0]} alt={p.name} /> : <ImagePlus size={26} className="muted" />}
                   {imgs.length > 1 && (
                     <span className="pcard-photocount"><ImagePlus size={11} /> {imgs.length}</span>
                   )}
+                  {soldOut && <span className="pcard-soldout-tag">{t.soldOut}</span>}
                 </button>
                 <div className="pcard-body">
                   <div className="pcard-cat">{categoryLabel(p.category, lang)}</div>
@@ -1263,9 +1292,14 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
                   <div className="pcard-ship">
                     <Truck size={13} /> {t.shipping} ({tier.label.toLowerCase()}): <Money usd={cost} rate={rate} stacked={false} />
                   </div>
-                  <button className="btn btn-whatsapp" onClick={() => orderViaWhatsApp(p)}>
-                    <MessageCircle size={16} /> {t.orderWhatsapp}
-                  </button>
+                  {lowStock && <div className="stock-badge stock-low">{t.onlyLeft.replace("{n}", stock)}</div>}
+                  {soldOut ? (
+                    <button className="btn btn-soldout" disabled>{t.soldOut}</button>
+                  ) : (
+                    <button className="btn btn-whatsapp" onClick={() => orderViaWhatsApp(p)}>
+                      <MessageCircle size={16} /> {t.orderWhatsapp}
+                    </button>
+                  )}
                   <button className="btn btn-linkcopy" onClick={() => copyLink(p)}>
                     {copiedId === p.id ? <><Check size={14} /> {t.linkCopied}</> : <><Link2 size={14} /> {t.copyLink}</>}
                   </button>
@@ -1289,6 +1323,9 @@ function ProductPage({ product, rate, tiers, t, lang, links, onBack, backLabel }
   const [copied, setCopied] = useState(false);
   const photos = productPhotos(product);
   const { tier, cost } = shippingFor(product.weightLb, tiers);
+  const stock = productStock(product);
+  const soldOut = stock === 0;
+  const lowStock = stock !== null && stock > 0 && stock <= LOW_STOCK_THRESHOLD;
 
   const waNumber = links.whatsapp?.trim()
     ? links.whatsapp.replace(/\D/g, "")
@@ -1332,9 +1369,19 @@ function ProductPage({ product, rate, tiers, t, lang, links, onBack, backLabel }
           <Truck size={15} /> {t.shipping} ({tier.label.toLowerCase()}): <Money usd={cost} rate={rate} stacked={false} />
         </div>
 
-        <button className="btn btn-whatsapp product-order" onClick={order}>
-          <MessageCircle size={18} /> {t.orderWhatsapp}
-        </button>
+        {soldOut ? (
+          <>
+            <div className="stock-badge stock-out">{t.soldOut}</div>
+            <button className="btn btn-soldout product-order" disabled>{t.soldOut}</button>
+          </>
+        ) : (
+          <>
+            {lowStock && <div className="stock-badge stock-low">{t.onlyLeft.replace("{n}", stock)}</div>}
+            <button className="btn btn-whatsapp product-order" onClick={order}>
+              <MessageCircle size={18} /> {t.orderWhatsapp}
+            </button>
+          </>
+        )}
         <button className="btn btn-linkcopy product-share" onClick={share}>
           {copied ? <><Check size={15} /> {t.linkCopied}</> : <><Link2 size={15} /> {t.shareProduct}</>}
         </button>
@@ -1463,7 +1510,7 @@ function SocialFooter({ links, t }) {
    MANAGE PRODUCTS (owner)
 ----------------------------------------------------------------*/
 function emptyForm(defaultCat) {
-  return { id: null, name: "", category: defaultCat || OTHER_CATEGORY, categories: [], priceUsd: "", weightLb: "", photo: "", photos: [], desc: "", active: true };
+  return { id: null, name: "", category: defaultCat || OTHER_CATEGORY, categories: [], priceUsd: "", weightLb: "", stock: "", photo: "", photos: [], desc: "", active: true };
 }
 
 function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiveRate, marginPct, setMarginPct, rateStatus, refetch, manualOverride, setOverride, onLock, t, lang, theme, updateTheme, links, updateLinks, categories, addCategory, deleteCategory, moveCategory }) {
@@ -1486,7 +1533,8 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
     // Migrate legacy single-photo products into the photos[] array for editing.
     const photos = productPhotos(p);
     const cats = Array.isArray(p.categories) ? p.categories : [];
-    setForm({ ...p, photos, categories: cats, priceUsd: String(p.priceUsd), weightLb: String(p.weightLb) });
+    const stock = (p.stock === 0 || p.stock) ? String(p.stock) : "";
+    setForm({ ...p, photos, categories: cats, stock, priceUsd: String(p.priceUsd), weightLb: String(p.weightLb) });
     setEditingId(p.id);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1509,6 +1557,10 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
       categories: extras,
       priceUsd: parseFloat(form.priceUsd) || 0,
       weightLb: parseFloat(form.weightLb) || 0,
+      // stock: keep "" when blank (untracked); otherwise a non-negative integer
+      stock: form.stock === "" || form.stock === null || form.stock === undefined
+        ? ""
+        : Math.max(0, parseInt(form.stock, 10) || 0),
       photos,
       // keep the legacy single `photo` in sync (first image) so any old code
       // path or cached link still shows something sensible
@@ -1631,6 +1683,11 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
                 <input className="input" type="number" step="0.1" min="0" value={form.weightLb} onChange={e => setForm({ ...form, weightLb: e.target.value })} placeholder="0.0" />
               </label>
               <label className="field field-wide">
+                <span>{t.stockLabel}</span>
+                <input className="input" type="number" step="1" min="0" value={form.stock} onChange={e => setForm({ ...form, stock: e.target.value })} placeholder={t.stockPlaceholder} />
+                <span className="field-hint">{t.stockHint}</span>
+              </label>
+              <label className="field field-wide">
                 <span>{t.descLabel}</span>
                 <input className="input" value={form.desc} onChange={e => setForm({ ...form, desc: e.target.value })} placeholder={t.descPlaceholder} />
               </label>
@@ -1686,7 +1743,14 @@ function ManageProducts({ products, setProducts, tiers, setTiers, rate, effectiv
                   <div className="manage-row-name">
                     {p.name} {!p.active && <span className="badge-inactive">{t.hidden}</span>}
                   </div>
-                  <div className="manage-row-meta">{categoryLabel(p.category, lang)} · ${p.priceUsd.toFixed(2)} · {p.weightLb} lb</div>
+                  <div className="manage-row-meta">
+                    {categoryLabel(p.category, lang)} · ${p.priceUsd.toFixed(2)} · {p.weightLb} lb
+                    {productStock(p) !== null && (
+                      <span className={isSoldOut(p) ? "meta-stock-out" : "meta-stock"}>
+                        {" · "}{isSoldOut(p) ? t.soldOut : `${productStock(p)} ${t.inStock}`}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="manage-row-actions">
                   <button className="iconbtn" onClick={() => toggleActive(p.id)} title={p.active ? t.hide : t.show}>
@@ -2379,6 +2443,23 @@ const baseStyles = `
 .btn-linkcopy { background: #fff; color: var(--navy); border: 1px solid var(--line); width: 100%; margin-top: 6px; padding: 7px; font-size: 12px; }
 .btn-linkcopy:hover { background: var(--paper-deep); }
 .btn-sm { padding: 7px 11px; font-size: 12.5px; }
+.btn-soldout { background: #E7E2D6; color: #8A7E68; width: 100%; margin-top: 4px; padding: 9px; cursor: not-allowed; font-weight: 700; }
+
+/* Stock badges & sold-out states */
+.field-hint { font-size: 11px; color: var(--muted-text); margin-top: 3px; font-weight: 400; }
+.stock-badge { font-size: 12px; font-weight: 700; padding: 4px 9px; border-radius: 7px; display: inline-block; margin: 2px 0 6px; }
+.stock-low { background: #FFF3E0; color: #C1622D; }
+.stock-out { background: #FDEDEC; color: #C0392B; }
+.product-info .stock-badge { font-size: 13px; }
+.pcard-soldout { opacity: 0.72; }
+.pcard-soldout .pcard-img-btn img { filter: grayscale(0.5); }
+.pcard-soldout-tag {
+  position: absolute; top: 8px; left: 8px; background: #C0392B; color: #fff;
+  font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 6px; letter-spacing: 0.3px;
+}
+.meta-stock { color: var(--whatsapp-deep); font-weight: 600; }
+.meta-stock-out { color: #C0392B; font-weight: 600; }
+
 
 .pcard-highlight {
   border-color: var(--terracotta);
