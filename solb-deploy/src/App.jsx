@@ -254,7 +254,14 @@ function buildThemeVars(theme) {
 ----------------------------------------------------------------*/
 const STRINGS = {
   es: {
-    tagline: "Compra personalizada por encargo · USA → Perú",
+    tagline: "Compra por encargo y ventas · USA → Perú",
+    aboutLines: [
+      "🌸 Compra por encargo y venta de productos",
+      "🇺🇸 Desde USA hacia Perú 🇵🇪",
+      "🛍️ Productos originales: ropa, zapatillas, accesorios, belleza y más",
+      "📦 Envíos seguros y rápidos",
+      "📲 Pídelo ahora por WhatsApp",
+    ],
     exchangeRate: "Tipo de cambio",
     tabCatalog: "Catálogo",
     tabManage: "Mis productos",
@@ -394,7 +401,14 @@ const STRINGS = {
     loadingApp: "Cargando",
   },
   en: {
-    tagline: "Personalized shopping by request · USA → Peru",
+    tagline: "Shopping by request & sales · USA → Peru",
+    aboutLines: [
+      "🌸 Shopping by request & product sales",
+      "🇺🇸 From the USA to Peru 🇵🇪",
+      "🛍️ Original products: clothing, sneakers, accessories, beauty & more",
+      "📦 Safe and fast shipping",
+      "📲 Order now via WhatsApp",
+    ],
     exchangeRate: "Exchange rate",
     tabCatalog: "Catalog",
     tabManage: "My products",
@@ -972,7 +986,7 @@ export default function App() {
       if (imgs.length) setOG("og:image", imgs[0]);
     } else {
       const title = `${STORE_NAME} — Importación de USA a Perú`;
-      const desc = `${STORE_NAME}: productos importados de Estados Unidos a Perú. Electrónica, ropa, belleza y más. Precios en dólares y soles, pedido fácil por WhatsApp.`;
+      const desc = `${STORE_NAME}: compra por encargo y venta de productos originales desde USA hacia Perú. Ropa, zapatillas, accesorios, belleza y más. Envíos seguros y rápidos. Pídelo por WhatsApp.`;
       document.title = title;
       setMeta("description", desc);
       setOG("og:title", title);
@@ -1247,6 +1261,11 @@ function Catalog({ products, rate, tiers, setOrders, highlightId, t, lang, links
 
   return (
     <div>
+      <div className="about-blurb">
+        {t.aboutLines.map((line, i) => (
+          <div key={i} className="about-line">{line}</div>
+        ))}
+      </div>
       <div className="search-row">
         <Search size={16} className="search-icon" />
         <input
@@ -2395,6 +2414,14 @@ const baseStyles = `
 
 /* Search / filters */
 .search-row { position: relative; margin-bottom: 12px; }
+.about-blurb {
+  background: linear-gradient(180deg, var(--terracotta-soft) 0%, #fff 100%);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 4px;
+}
+.about-line { font-size: 13px; line-height: 1.45; color: var(--ink); }
+.about-line:first-child { font-size: 14.5px; font-weight: 700; color: var(--navy); }
+
 .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--muted-text); pointer-events: none; }
 .search-row .search-input { padding: 9px 11px 9px 40px; }
 .chip-row { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 16px; }
