@@ -796,6 +796,10 @@ export default function App() {
   const [tiers, setTiers] = useState(DEFAULT_WEIGHT_TIERS);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [marginPct, setMarginPct] = useState(0);
+  // Gate: stays false until the initial Supabase load finishes. Without this,
+  // the save effects fire on mount with the DEFAULT values and overwrite the
+  // owner's saved settings before they've loaded (e.g. category order reverting).
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [pinAttempt, setPinAttempt] = useState("");
   const [pinError, setPinError] = useState(false);
@@ -940,14 +944,17 @@ export default function App() {
       setMarginPct(m);
       const c = await storageGet("settings:categories", null);
       if (Array.isArray(c) && c.length) setCategories(c);
+      // Mark load complete LAST, so the save effects below don't run with
+      // default values and clobber what we just loaded.
+      setSettingsLoaded(true);
     })();
   }, []);
 
   useEffect(() => { if (products) storageSet("catalog:products", products); }, [products]);
   useEffect(() => { if (orders) storageSet("orders:list", orders); }, [orders]);
-  useEffect(() => { storageSet("settings:tiers", tiers); }, [tiers]);
-  useEffect(() => { storageSet("settings:margin", marginPct); }, [marginPct]);
-  useEffect(() => { storageSet("settings:categories", categories); }, [categories]);
+  useEffect(() => { if (settingsLoaded) storageSet("settings:tiers", tiers); }, [tiers, settingsLoaded]);
+  useEffect(() => { if (settingsLoaded) storageSet("settings:margin", marginPct); }, [marginPct, settingsLoaded]);
+  useEffect(() => { if (settingsLoaded) storageSet("settings:categories", categories); }, [categories, settingsLoaded]);
 
   const effectiveRate = rate * (1 + marginPct / 100);
 
