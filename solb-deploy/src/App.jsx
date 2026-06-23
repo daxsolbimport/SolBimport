@@ -33,22 +33,52 @@ const DEFAULT_WEIGHT_TIERS = [
 const FALLBACK_RATE = 3.75; // USD -> PEN fallback if live fetch fails
 
 /* ---------------------------------------------------------------
-   STORAGE HELPERS — localStorage for real deployment
+   STORAGE HELPERS — Supabase with localStorage fallback
 ----------------------------------------------------------------*/
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+async function sbGet(key) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/store_data?key=eq.${encodeURIComponent(key)}&select=value`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+    const rows = await res.json();
+    return rows.length > 0 ? JSON.parse(rows[0].value) : null;
+  } catch { return null; }
+}
+
+async function sbSet(key, value) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/store_data?on_conflict=key`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates",
+      },
+      body: JSON.stringify({ key, value: JSON.stringify(value) }),
+    });
+  } catch (e) { console.error("supabase set failed", key, e); }
+}
+
 async function storageGet(key, fallback) {
   try {
-    const val = localStorage.getItem("solb:" + key);
-    return val !== null ? JSON.parse(val) : fallback;
-  } catch {
-    return fallback;
-  }
+    const remote = await sbGet(key);
+    if (remote !== null) return remote;
+    const local = localStorage.getItem("solb:" + key);
+    return local !== null ? JSON.parse(local) : fallback;
+  } catch { return fallback; }
 }
+
 async function storageSet(key, value) {
   try {
     localStorage.setItem("solb:" + key, JSON.stringify(value));
-  } catch (e) {
-    console.error("storage set failed", key, e);
-  }
+    await sbSet(key, value);
+  } catch (e) { console.error("storage set failed", key, e); }
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
