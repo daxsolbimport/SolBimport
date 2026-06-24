@@ -1026,7 +1026,13 @@ export default function App() {
         links={links}
       />
       <nav className="tabs">
-        <TabBtn icon={<Store size={17} />} label={t.tabCatalog} active={tab === "catalog" && route.view !== "product"} onClick={() => { setTab("catalog"); if (route.view === "product") navigateTo(window.location.origin + "/"); }} />
+        <TabBtn icon={<Store size={17} />} label={t.tabCatalog} active={tab === "catalog" && route.view !== "product"} onClick={() => {
+          setTab("catalog");
+          setActiveCatKey("");
+          setCatalogQuery("");
+          if (route.view === "product") navigateTo(window.location.origin + "/");
+          window.scrollTo({ top: 0 });
+        }} />
         {unlocked && (
           <>
             <TabBtn icon={<Pencil size={17} />} label={t.tabManage} active={tab === "manage"} onClick={() => setTab("manage")} />
